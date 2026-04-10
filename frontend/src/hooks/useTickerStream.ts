@@ -40,6 +40,11 @@ const alertHandlers: Set<AlertHandler> = new Set();
 let flushTimer: number | null = null;
 
 function wsUrl(): string {
+  const baseUrl = import.meta.env.VITE_API_URL || "";
+  if (baseUrl) {
+    const wsBase = baseUrl.replace(/^http/, "ws");
+    return `${wsBase}${WS_PATH}`;
+  }
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}${WS_PATH}`;
 }
