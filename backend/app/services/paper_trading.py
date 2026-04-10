@@ -11,6 +11,9 @@ Rules:
   - Sell: quantity must not exceed the current position; sell does NOT
     change avg_cost; cash increases by qty*price; when position hits 0
     it is removed from the DB.
+
+All operations are scoped to a single PaperPortfolio passed in by the caller
+(one portfolio per user — the auth layer resolves which one).
 """
 
 from __future__ import annotations
@@ -24,14 +27,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.paper import PaperPortfolio, PaperPosition, PaperTrade
 
 if TYPE_CHECKING:
+    from .finnhub_client import FinnhubClient
     from .finnhub_stream import FinnhubStream
 
 
-async def get_or_create_portfolio(db: AsyncSession) -> PaperPortfolio:
-    res = await db.execute(select(PaperPortfolio).order_by(PaperPortfolio.id).limit(1))
+async def get_portfolio_for_user(db: AsyncSession, user_id: int) -> PaperPortfolio:
+    res = await db.execute(select(PaperPortfolio).where(PaperPortfolio.user_id == user_id))
     p = res.scalar_one_or_none()
     if p is None:
-        p = PaperPortfolio(cash=Decimal("100000"))
+        p = PaperPortfolio(user_id=user_id, cash=Decimal("100000"))
         db.add(p)
         await db.commit()
         await db.refresh(p)
@@ -47,33 +51,34 @@ async def _get_position(db: AsyncSession, portfolio_id: int, symbol: str) -> Pap
     return res.scalar_one_or_none()
 
 
-def _price_or_raise(stream: "FinnhubStream", symbol: str) -> Decimal:
-    # Deprecated: use async _get_live_price instead
-    pass
-
-async def _get_live_price(stream: "FinnhubStream", finnhub: "FinnhubClient", symbol: str) -> Decimal:
+async def _get_live_price(
+    stream: "FinnhubStream", finnhub: "FinnhubClient | None", symbol: str
+) -> Decimal:
     last = stream.last_price(symbol)
     if last is not None:
         return Decimal(str(last))
-    quote = await finnhub.quote(symbol)
-    if not quote.get("c"):
-        raise ValueError(f"no live price known for {symbol} yet")
-    return Decimal(str(quote["c"]))
+    if finnhub is not None:
+        quote = await finnhub.quote(symbol)
+        if quote.get("c"):
+            return Decimal(str(quote["c"]))
+    raise ValueError(f"no live price known for {symbol} yet")
 
 
 async def buy(
-    db: AsyncSession, stream: "FinnhubStream", finnhub: "FinnhubClient", symbol: str, quantity: int
+    db: AsyncSession,
+    stream: "FinnhubStream",
+    finnhub: "FinnhubClient | None",
+    portfolio: PaperPortfolio,
+    symbol: str,
+    quantity: int,
 ) -> PaperTrade:
     if quantity <= 0:
         raise ValueError("quantity must be > 0")
     symbol = symbol.upper()
-    portfolio = await get_or_create_portfolio(db)
     price = await _get_live_price(stream, finnhub, symbol)
     cost = price * Decimal(quantity)
     if portfolio.cash < cost:
-        raise ValueError(
-            f"insufficient cash: need {cost}, have {portfolio.cash}"
-        )
+        raise ValueError(f"insufficient cash: need {cost}, have {portfolio.cash}")
     portfolio.cash -= cost
 
     position = await _get_position(db, portfolio.id, symbol)
@@ -104,12 +109,16 @@ async def buy(
 
 
 async def sell(
-    db: AsyncSession, stream: "FinnhubStream", finnhub: "FinnhubClient", symbol: str, quantity: int
+    db: AsyncSession,
+    stream: "FinnhubStream",
+    finnhub: "FinnhubClient | None",
+    portfolio: PaperPortfolio,
+    symbol: str,
+    quantity: int,
 ) -> PaperTrade:
     if quantity <= 0:
         raise ValueError("quantity must be > 0")
     symbol = symbol.upper()
-    portfolio = await get_or_create_portfolio(db)
     position = await _get_position(db, portfolio.id, symbol)
     if position is None or position.quantity < quantity:
         have = position.quantity if position else 0
@@ -134,22 +143,26 @@ async def sell(
     return trade
 
 
-async def portfolio_view(db: AsyncSession, stream: "FinnhubStream", finnhub: "FinnhubClient") -> dict:
-    portfolio = await get_or_create_portfolio(db)
+async def portfolio_view(
+    db: AsyncSession,
+    stream: "FinnhubStream",
+    finnhub: "FinnhubClient | None",
+    portfolio: PaperPortfolio,
+) -> dict:
     res = await db.execute(
-        select(PaperPosition).where(PaperPosition.portfolio_id == portfolio.id).order_by(
-            PaperPosition.symbol
-        )
+        select(PaperPosition)
+        .where(PaperPosition.portfolio_id == portfolio.id)
+        .order_by(PaperPosition.symbol)
     )
     positions: list[dict] = []
     market_value = Decimal(0)
     for p in res.scalars().all():
         last = stream.last_price(p.symbol)
-        if last is None:
+        if last is None and finnhub is not None:
             quote = await finnhub.quote(p.symbol)
             if quote and quote.get("c"):
                 last = quote["c"]
-        
+
         mv = None
         unrl = None
         unrl_pct = None

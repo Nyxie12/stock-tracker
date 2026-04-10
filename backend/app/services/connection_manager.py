@@ -24,16 +24,19 @@ class ConnectionManager:
     def __init__(self, stream: "FinnhubStream") -> None:
         self.stream = stream
         self._clients: dict[WebSocket, set[str]] = {}
+        self._user_ids: dict[WebSocket, int] = {}
         self._lock = asyncio.Lock()
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws: WebSocket, user_id: int) -> None:
         await ws.accept()
         async with self._lock:
             self._clients[ws] = set()
+            self._user_ids[ws] = user_id
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
             symbols = self._clients.pop(ws, set())
+            self._user_ids.pop(ws, None)
         for symbol in symbols:
             await self.stream.unsubscribe(symbol)
 
@@ -71,6 +74,12 @@ class ConnectionManager:
     async def broadcast_alert(self, symbol: str, payload: dict) -> None:
         async with self._lock:
             targets = [ws for ws, subs in self._clients.items() if symbol in subs]
+        for ws in targets:
+            await self._safe_send(ws, payload)
+
+    async def broadcast_to_user(self, user_id: int, payload: dict) -> None:
+        async with self._lock:
+            targets = [ws for ws, uid in self._user_ids.items() if uid == user_id]
         for ws in targets:
             await self._safe_send(ws, payload)
 

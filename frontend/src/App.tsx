@@ -1,11 +1,15 @@
 import { NavLink, Route, Routes } from "react-router-dom";
-import { Activity, BarChart3, Bell, Grid3x3, LineChart, Newspaper, Wallet } from "lucide-react";
+import { Activity, BarChart3, Bell, Grid3x3, LineChart, LogOut, Newspaper, Wallet } from "lucide-react";
 import WatchlistPage from "./pages/WatchlistPage";
 import ChartsPage from "./pages/ChartsPage";
 import HeatmapPage from "./pages/HeatmapPage";
 import AlertsPage from "./pages/AlertsPage";
 import PaperTradingPage from "./pages/PaperTradingPage";
 import NewsPage from "./pages/NewsPage";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import RequireAuth from "./components/RequireAuth";
+import { useAuthStore } from "./stores/authStore";
 
 const navItems = [
   { to: "/", label: "Watchlist", icon: LineChart, end: true },
@@ -16,10 +20,13 @@ const navItems = [
   { to: "/news", label: "News", icon: Newspaper, end: false },
 ];
 
-export default function App() {
+function AppShell() {
+  const user = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
+
   return (
     <div className="flex h-full w-full">
-      <aside className="w-56 shrink-0 border-r border-zinc-800 bg-zinc-900/60 p-4">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/60 p-4">
         <div className="mb-6 flex items-center gap-2 text-lg font-semibold">
           <Activity className="h-5 w-5 text-emerald-400" />
           <span>Stock Tracker</span>
@@ -43,6 +50,20 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
+        <div className="mt-auto flex flex-col gap-2 border-t border-zinc-800 pt-4 text-sm">
+          {user && (
+            <div className="truncate text-xs text-zinc-400" title={user.email}>
+              {user.email}
+            </div>
+          )}
+          <button
+            onClick={logout}
+            className="flex items-center gap-2 rounded px-3 py-2 text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-100"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </button>
+        </div>
       </aside>
       <main className="flex-1 overflow-auto p-6">
         <Routes>
@@ -56,5 +77,22 @@ export default function App() {
         </Routes>
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="*"
+        element={
+          <RequireAuth>
+            <AppShell />
+          </RequireAuth>
+        }
+      />
+    </Routes>
   );
 }

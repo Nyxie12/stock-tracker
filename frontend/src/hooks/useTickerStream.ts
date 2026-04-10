@@ -12,6 +12,7 @@
 
 import { useEffect } from "react";
 import { useTickerStore } from "../stores/tickerStore";
+import { getAuthToken, useAuthStore } from "../stores/authStore";
 
 type TickMsg = { type: "tick"; symbol: string; price: number; ts: number };
 type AlertMsg = {
@@ -39,21 +40,23 @@ const tickBuffer: { symbol: string; price: number; ts: number }[] = [];
 const alertHandlers: Set<AlertHandler> = new Set();
 let flushTimer: number | null = null;
 
-function wsUrl(): string {
+function wsUrl(): string | null {
+  const token = getAuthToken();
+  if (!token) return null;
   const baseUrl = import.meta.env.VITE_API_URL || "";
-  if (baseUrl) {
-    const wsBase = baseUrl.replace(/^http/, "ws");
-    return `${wsBase}${WS_PATH}`;
-  }
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}${WS_PATH}`;
+  const base = baseUrl
+    ? baseUrl.replace(/^http/, "ws")
+    : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+  return `${base}${WS_PATH}?token=${encodeURIComponent(token)}`;
 }
 
 function ensureSocket(): void {
   if (socket && socket.readyState <= 1) return;
   if (connecting) return;
+  const url = wsUrl();
+  if (!url) return; // not authenticated yet
   connecting = true;
-  const ws = new WebSocket(wsUrl());
+  const ws = new WebSocket(url);
   socket = ws;
   ws.addEventListener("open", () => {
     connecting = false;
@@ -78,9 +81,14 @@ function ensureSocket(): void {
       alertHandlers.forEach((h) => h(msg));
     }
   });
-  const scheduleReconnect = () => {
+  const scheduleReconnect = (evt?: CloseEvent) => {
     connecting = false;
     socket = null;
+    // 1008 = policy violation (bad/missing token). Don't reconnect — log out.
+    if (evt && evt.code === 1008) {
+      useAuthStore.getState().logout();
+      return;
+    }
     setTimeout(() => ensureSocket(), reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 15000);
   };
@@ -155,3 +163,23 @@ export function onAlert(handler: AlertHandler): () => void {
     alertHandlers.delete(handler);
   };
 }
+
+// Close the shared socket whenever the auth token changes so a fresh login
+// reconnects under the new identity.
+let lastToken: string | null = useAuthStore.getState().token;
+useAuthStore.subscribe((state) => {
+  if (state.token !== lastToken) {
+    lastToken = state.token;
+    if (socket) {
+      try {
+        socket.close();
+      } catch {
+        // ignore
+      }
+      socket = null;
+    }
+    if (state.token && refcount.size > 0) {
+      ensureSocket();
+    }
+  }
+});

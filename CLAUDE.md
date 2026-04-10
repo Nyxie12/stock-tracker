@@ -74,6 +74,25 @@ Env vars (via `backend/.env`, loaded by `pydantic-settings`):
 - `CORS_ORIGINS` — comma-separated, default `http://localhost:5173`
 - `TICK_THROTTLE_MS` — default 500
 - `DEBUG` — default true
+- `JWT_SECRET_KEY` — JWT signing secret. Has a dev default; **must** be overridden in production.
+- `ACCESS_TOKEN_EXPIRE_MINUTES` — default 7 days.
+
+## Auth
+
+Email/password accounts with JWT bearer tokens. All data routers (`watchlist`,
+`alerts`, `paper`) and the `/ws` WebSocket require a valid token; every row in
+`watchlists`, `alerts`, `paper_portfolios` is scoped by `user_id`. Token is
+stored in `localStorage` on the frontend and injected as `Authorization:
+Bearer …` by `frontend/src/api/client.ts`. The WS connects with
+`?token=<jwt>`; a 1008 close triggers a frontend logout.
+
+Key files: `backend/app/models/user.py`, `backend/app/routers/auth.py`,
+`backend/app/utils/security.py`, `backend/app/deps.py`,
+`frontend/src/stores/authStore.ts`, `frontend/src/components/RequireAuth.tsx`.
+
+**Note:** The schema changed — if you have a pre-auth `backend/stocktracker.db`
+it must be deleted before first run (the repo keeps one such file named
+`stocktracker.db.pre-auth-backup`).
 
 ## Current status / next steps
 

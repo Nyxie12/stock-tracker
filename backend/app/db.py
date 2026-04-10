@@ -30,7 +30,7 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 async def init_models() -> None:
     from .models.base import Base  # noqa: F401
     # Import all models so they register on Base.metadata
-    from .models import alert, paper, watchlist  # noqa: F401
+    from .models import alert, paper, user, watchlist  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

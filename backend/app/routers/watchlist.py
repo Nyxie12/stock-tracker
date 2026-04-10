@@ -3,17 +3,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
+from ..deps import get_current_user
+from ..models.user import User
 from ..models.watchlist import Watchlist, WatchlistItem
 from ..schemas.watchlist import WatchlistItemCreate, WatchlistItemOut
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
 
-async def _get_default_watchlist(db: AsyncSession) -> Watchlist:
-    res = await db.execute(select(Watchlist).order_by(Watchlist.id).limit(1))
+async def _get_user_watchlist(db: AsyncSession, user: User) -> Watchlist:
+    res = await db.execute(select(Watchlist).where(Watchlist.user_id == user.id).limit(1))
     wl = res.scalar_one_or_none()
     if wl is None:
-        wl = Watchlist(name="Default")
+        wl = Watchlist(user_id=user.id, name="Default")
         db.add(wl)
         await db.commit()
         await db.refresh(wl)
@@ -21,8 +23,12 @@ async def _get_default_watchlist(db: AsyncSession) -> Watchlist:
 
 
 @router.get("", response_model=list[WatchlistItemOut])
-async def list_items(request: Request, db: AsyncSession = Depends(get_db)) -> list[WatchlistItemOut]:
-    wl = await _get_default_watchlist(db)
+async def list_items(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[WatchlistItemOut]:
+    wl = await _get_user_watchlist(db, user)
     res = await db.execute(
         select(WatchlistItem).where(WatchlistItem.watchlist_id == wl.id).order_by(WatchlistItem.added_at)
     )
@@ -57,7 +63,10 @@ async def list_items(request: Request, db: AsyncSession = Depends(get_db)) -> li
 
 @router.post("", response_model=WatchlistItemOut, status_code=201)
 async def add_item(
-    payload: WatchlistItemCreate, request: Request, db: AsyncSession = Depends(get_db)
+    payload: WatchlistItemCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> WatchlistItemOut:
     symbol = payload.symbol.upper().strip()
     if not symbol:
@@ -70,7 +79,7 @@ async def add_item(
     if not profile or not profile.get("name"):
         raise HTTPException(404, f"Ticker '{symbol}' not found. Check the symbol and try again.")
 
-    wl = await _get_default_watchlist(db)
+    wl = await _get_user_watchlist(db, user)
     existing = await db.execute(
         select(WatchlistItem).where(WatchlistItem.watchlist_id == wl.id, WatchlistItem.symbol == symbol)
     )
@@ -99,9 +108,13 @@ async def add_item(
 
 
 @router.delete("/{symbol}", status_code=204)
-async def remove_item(symbol: str, db: AsyncSession = Depends(get_db)) -> None:
+async def remove_item(
+    symbol: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
     symbol = symbol.upper().strip()
-    wl = await _get_default_watchlist(db)
+    wl = await _get_user_watchlist(db, user)
     res = await db.execute(
         select(WatchlistItem).where(WatchlistItem.watchlist_id == wl.id, WatchlistItem.symbol == symbol)
     )

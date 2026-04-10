@@ -1,15 +1,44 @@
 import logging
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+
+from ..db import SessionLocal
+from ..models.user import User
+from ..utils.security import JWTError, decode_access_token
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _authenticate(websocket: WebSocket) -> User | None:
+    token = websocket.query_params.get("token")
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token)
+    except JWTError:
+        return None
+    sub = payload.get("sub")
+    if sub is None:
+        return None
+    try:
+        user_id = int(sub)
+    except (TypeError, ValueError):
+        return None
+    async with SessionLocal() as db:
+        return await db.get(User, user_id)
+
+
 @router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket) -> None:
+    user = await _authenticate(websocket)
+    if user is None:
+        # Per RFC 6455, 1008 = policy violation. Must close *before* accept.
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     manager = websocket.app.state.manager
-    await manager.connect(websocket)
+    await manager.connect(websocket, user.id)
     try:
         while True:
             msg = await websocket.receive_json()

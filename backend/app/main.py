@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import SessionLocal, init_models
-from .routers import alerts, candles, debug, heatmap, news, paper, profile, quote, watchlist, ws
+from .routers import alerts, auth, candles, debug, heatmap, news, paper, profile, quote, watchlist, ws
 from .services.alert_engine import AlertEngine
 from .services.connection_manager import ConnectionManager
 from .services.finnhub_client import FinnhubClient
@@ -59,6 +59,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(watchlist.router)
 app.include_router(profile.router)
 app.include_router(quote.router)

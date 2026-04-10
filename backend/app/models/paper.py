@@ -11,6 +11,9 @@ class PaperPortfolio(Base):
     __tablename__ = "paper_portfolios"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
     cash: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=Decimal("100000"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

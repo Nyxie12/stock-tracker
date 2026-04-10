@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class _LoadedAlert:
     id: int
+    user_id: int
     symbol: str
     condition: str
     threshold: float
@@ -60,7 +61,14 @@ class AlertEngine:
             res = await db.execute(select(Alert).where(Alert.active.is_(True)))
             for a in res.scalars().all():
                 self._by_symbol.setdefault(a.symbol, []).append(
-                    _LoadedAlert(id=a.id, symbol=a.symbol, condition=a.condition, threshold=float(a.threshold), active=True)
+                    _LoadedAlert(
+                        id=a.id,
+                        user_id=a.user_id,
+                        symbol=a.symbol,
+                        condition=a.condition,
+                        threshold=float(a.threshold),
+                        active=True,
+                    )
                 )
         # Ensure upstream subscription for every alert symbol.
         for symbol in self._by_symbol:
@@ -70,6 +78,7 @@ class AlertEngine:
         self._by_symbol.setdefault(alert.symbol, []).append(
             _LoadedAlert(
                 id=alert.id,
+                user_id=alert.user_id,
                 symbol=alert.symbol,
                 condition=alert.condition,
                 threshold=float(alert.threshold),
@@ -130,8 +139,8 @@ class AlertEngine:
                     await db.commit()
         except Exception as e:
             log.warning("failed to persist alert fire: %s", e)
-        await self.manager.broadcast_alert(
-            a.symbol,
+        await self.manager.broadcast_to_user(
+            a.user_id,
             {
                 "type": "alert",
                 "alertId": a.id,
