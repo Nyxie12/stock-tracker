@@ -84,5 +84,3 @@ The application will now be running on `http://localhost:5174/`.
 ## 🎨 Design Philosophy
 This project purposefully avoids generic UI libraries (like MUI or Shadcn) to strictly enforce a bespoke "Bloomberg Terminal" aesthetic. It utilizes strict color theory, custom scrollbars, layout animations, and typography (`Inter` for UI, `JetBrains Mono` for data) to present dense financial data legibly and beautifully.
 
-## 📄 License
-This project is licensed under the MIT License.
