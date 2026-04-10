@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/paper", tags=["paper"])
 
 @router.get("/portfolio", response_model=PortfolioOut)
 async def portfolio(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
-    return await paper_trading.portfolio_view(db, request.app.state.stream)
+    return await paper_trading.portfolio_view(db, request.app.state.stream, request.app.state.finnhub)
 
 
 @router.get("/trades", response_model=list[TradeOut])

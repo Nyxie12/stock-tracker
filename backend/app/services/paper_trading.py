@@ -134,7 +134,7 @@ async def sell(
     return trade
 
 
-async def portfolio_view(db: AsyncSession, stream: "FinnhubStream") -> dict:
+async def portfolio_view(db: AsyncSession, stream: "FinnhubStream", finnhub: "FinnhubClient") -> dict:
     portfolio = await get_or_create_portfolio(db)
     res = await db.execute(
         select(PaperPosition).where(PaperPosition.portfolio_id == portfolio.id).order_by(
@@ -145,6 +145,11 @@ async def portfolio_view(db: AsyncSession, stream: "FinnhubStream") -> dict:
     market_value = Decimal(0)
     for p in res.scalars().all():
         last = stream.last_price(p.symbol)
+        if last is None:
+            quote = await finnhub.quote(p.symbol)
+            if quote and quote.get("c"):
+                last = quote["c"]
+        
         mv = None
         unrl = None
         unrl_pct = None

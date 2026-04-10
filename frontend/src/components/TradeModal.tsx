@@ -278,7 +278,7 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
 
               {/* Estimate Display */}
               {amount && price && price > 0 ? (
-                <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 flex flex-col gap-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-400">Total {mode === "dollars" ? "Shares" : side === "buy" ? "Cost" : "Proceeds"}</span>
                     <span className="font-mono font-medium text-zinc-200">
@@ -287,6 +287,14 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
                         : formatPrice(costOrProceeds)}
                     </span>
                   </div>
+                  {side === "sell" && position && (
+                    <div className="flex justify-between text-sm border-t border-zinc-800/60 pt-2">
+                      <span className="text-zinc-400">Estimated P&L</span>
+                      <span className={`font-mono font-medium ${price >= position.avg_cost ? "text-emerald-400" : "text-rose-400"}`}>
+                        {price >= position.avg_cost ? "+" : ""}{formatPrice((price - position.avg_cost) * shares)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               ) : null}
 
