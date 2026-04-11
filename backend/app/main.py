@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,11 @@ from .services.finnhub_client import FinnhubClient
 from .services.finnhub_stream import FinnhubStream
 from .services.heatmap import HeatmapService
 from .services.limit_order_engine import LimitOrderEngine
+
+# Background refresh cadence for the heatmap fixed universes. Staggered so the
+# SP500 top-20 refresh finishes before NASDAQ-100 (~100s @ 1 req/sec) starts.
+HEATMAP_REFRESH_INTERVAL_S = 300  # 5 min
+HEATMAP_STAGGER_S = 30
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -41,19 +47,58 @@ async def lifespan(app: FastAPI):
     await alert_engine.load_from_db()
     await limit_order_engine.load_from_db()
 
+    heatmap_service = HeatmapService(finnhub=finnhub)
+    heatmap_service.load_snapshot()
+
     app.state.stream = stream
     app.state.finnhub = finnhub
     app.state.manager = manager
     app.state.alert_engine = alert_engine
     app.state.limit_order_engine = limit_order_engine
-    app.state.heatmap = HeatmapService(finnhub=finnhub)
+    app.state.heatmap = heatmap_service
+
+    heatmap_task = asyncio.create_task(_heatmap_refresh_loop(heatmap_service))
 
     log.info("stock-tracker started (debug=%s)", settings.debug)
     try:
         yield
     finally:
+        heatmap_task.cancel()
+        try:
+            await heatmap_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await stream.stop()
         await finnhub.close()
+
+
+async def _heatmap_refresh_loop(service: HeatmapService) -> None:
+    """Background task: periodically refresh the fixed heatmap universes.
+
+    Runs sp500 immediately, then staggers nasdaq so both aren't hammering
+    Finnhub's throttle simultaneously. Swallows exceptions so transient
+    failures don't kill the loop.
+    """
+    # Skip if no API key — there's nothing to fetch.
+    if not settings.finnhub_api_key:
+        log.info("heatmap refresh loop: FINNHUB_API_KEY not set, skipping")
+        return
+    try:
+        while True:
+            try:
+                await service.refresh_fixed("sp500")
+            except Exception as e:
+                log.warning("heatmap sp500 refresh failed: %s", e)
+            await asyncio.sleep(HEATMAP_STAGGER_S)
+            try:
+                await service.refresh_fixed("nasdaq")
+            except Exception as e:
+                log.warning("heatmap nasdaq refresh failed: %s", e)
+            remaining = max(1, HEATMAP_REFRESH_INTERVAL_S - HEATMAP_STAGGER_S)
+            await asyncio.sleep(remaining)
+    except asyncio.CancelledError:
+        log.info("heatmap refresh loop cancelled")
+        raise
 
 
 app = FastAPI(title="Stock Tracker API", lifespan=lifespan)
