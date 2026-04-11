@@ -12,6 +12,7 @@ from .services.connection_manager import ConnectionManager
 from .services.finnhub_client import FinnhubClient
 from .services.finnhub_stream import FinnhubStream
 from .services.heatmap import HeatmapService
+from .services.limit_order_engine import LimitOrderEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -26,19 +27,25 @@ async def lifespan(app: FastAPI):
     manager = ConnectionManager(stream=stream)
 
     alert_engine = AlertEngine(session_factory=SessionLocal, stream=stream, manager=manager)
+    limit_order_engine = LimitOrderEngine(
+        session_factory=SessionLocal, stream=stream, finnhub=finnhub, manager=manager
+    )
 
     async def _on_tick(symbol: str, price: float, ts: int) -> None:
         await alert_engine.on_tick(symbol, price, ts)
+        await limit_order_engine.on_tick(symbol, price, ts)
         await manager.broadcast_tick(symbol, price, ts)
 
     stream.add_subscriber(_on_tick)
     await stream.start()
     await alert_engine.load_from_db()
+    await limit_order_engine.load_from_db()
 
     app.state.stream = stream
     app.state.finnhub = finnhub
     app.state.manager = manager
     app.state.alert_engine = alert_engine
+    app.state.limit_order_engine = limit_order_engine
     app.state.heatmap = HeatmapService(finnhub=finnhub)
 
     log.info("stock-tracker started (debug=%s)", settings.debug)

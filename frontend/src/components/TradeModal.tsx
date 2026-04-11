@@ -8,17 +8,21 @@ import { useTickerStream } from "../hooks/useTickerStream";
 import { useTickerStore } from "../stores/tickerStore";
 
 type Mode = "shares" | "dollars";
+type OrderType = "market" | "limit";
 
 type Props = {
   isOpen: boolean;
   onClose: () => void;
   initialSide: "buy" | "sell" | null;
   portfolio: Portfolio | undefined;
+  marketOpen?: boolean;
   onSuccess: () => void;
 };
 
-export default function TradeModal({ isOpen, onClose, initialSide, portfolio, onSuccess }: Props) {
+export default function TradeModal({ isOpen, onClose, initialSide, portfolio, marketOpen = true, onSuccess }: Props) {
   const [side, setSide] = useState<"buy" | "sell">(initialSide || "buy");
+  const [orderType, setOrderType] = useState<OrderType>("market");
+  const [limitPrice, setLimitPrice] = useState("");
   const [mode, setMode] = useState<Mode>("shares");
   const [symbolInput, setSymbolInput] = useState("");
   const [activeSymbol, setActiveSymbol] = useState("");
@@ -31,6 +35,8 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
   useEffect(() => {
     if (isOpen) {
       setSide(initialSide || "buy");
+      setOrderType("market");
+      setLimitPrice("");
       setMode("shares");
       setSymbolInput("");
       setActiveSymbol("");
@@ -53,11 +59,14 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
     retry: false,
   });
 
-  const price = liveTick ?? quoteQ.data?.c ?? null;
+  const livePrice = liveTick ?? quoteQ.data?.c ?? null;
+  const parsedLimit = parseFloat(limitPrice) || 0;
+  // For limit orders the "execution price" is the limit price, not the live price.
+  const price = orderType === "limit" ? (parsedLimit > 0 ? parsedLimit : null) : livePrice;
 
   // Derived calculations
   const parsedAmount = parseFloat(amount) || 0;
-  
+
   let shares = 0;
   let costOrProceeds = 0;
 
@@ -89,17 +98,32 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
       setError("Please select a symbol.");
       return;
     }
+    if (orderType === "limit" && (!parsedLimit || parsedLimit <= 0)) {
+      setError("Enter a limit price.");
+      return;
+    }
     if (!price || price <= 0) {
       setError("Cannot fetch live price for this symbol.");
       return;
     }
     if (shares <= 0) {
-      setError(`Amount too small to buy at least 1 share (Price: ${formatPrice(price)}).`);
+      setError(`Amount too small to ${side} at least 1 share (Price: ${formatPrice(price)}).`);
+      return;
+    }
+    // Market hours don't apply to limit-order *placement* — only to fills.
+    if (orderType === "market" && !marketOpen) {
+      setError("Market is closed. Use a limit order or wait for the next session (4:00–20:00 ET weekdays).");
       return;
     }
     if (side === "buy" && portfolio) {
-      if (costOrProceeds > portfolio.cash) {
-        setError(`Insufficient cash. Need ${formatPrice(costOrProceeds)}, have ${formatPrice(portfolio.cash)}`);
+      if (costOrProceeds > portfolio.buying_power) {
+        if (costOrProceeds <= portfolio.cash && portfolio.pending_settlement > 0) {
+          setError(
+            `Insufficient buying power — ${formatPrice(portfolio.pending_settlement)} of cash is still settling. Available: ${formatPrice(portfolio.buying_power)}`
+          );
+        } else {
+          setError(`Insufficient buying power. Need ${formatPrice(costOrProceeds)}, have ${formatPrice(portfolio.buying_power)}`);
+        }
         return;
       }
     }
@@ -116,7 +140,14 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
     setSubmitting(true);
     setError(null);
     try {
-      if (side === "buy") {
+      if (orderType === "limit") {
+        await paperApi.placeOrder({
+          symbol: activeSymbol,
+          side,
+          quantity: shares,
+          limit_price: parsedLimit,
+        });
+      } else if (side === "buy") {
         await paperApi.buy(activeSymbol, shares);
       } else {
         await paperApi.sell(activeSymbol, shares);
@@ -181,6 +212,43 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
 
           {step === "input" && (
             <div className="space-y-6 animate-fade-in">
+              {/* Order Type Toggle */}
+              <div className="space-y-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">Order Type</label>
+                <div className="inline-flex w-full overflow-hidden rounded border border-zinc-800 bg-zinc-900">
+                  <button
+                    onClick={() => setOrderType("market")}
+                    className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                      orderType === "market"
+                        ? side === "buy"
+                          ? "bg-emerald-500 text-zinc-950"
+                          : "bg-rose-500 text-zinc-950"
+                        : "text-zinc-400 hover:bg-zinc-800"
+                    }`}
+                  >
+                    Market
+                  </button>
+                  <button
+                    onClick={() => setOrderType("limit")}
+                    className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                      orderType === "limit"
+                        ? side === "buy"
+                          ? "bg-emerald-500 text-zinc-950"
+                          : "bg-rose-500 text-zinc-950"
+                        : "text-zinc-400 hover:bg-zinc-800"
+                    }`}
+                  >
+                    Limit
+                  </button>
+                </div>
+                {orderType === "limit" && (
+                  <p className="text-xs text-zinc-500">
+                    Limit orders fill automatically when price crosses your limit. Reserved
+                    {side === "buy" ? " buying power" : " shares"} until filled or cancelled.
+                  </p>
+                )}
+              </div>
+
               {/* Symbol Input */}
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -217,14 +285,44 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
                     <span className="font-mono font-medium text-zinc-300">{activeSymbol}</span>
                     {quoteQ.isLoading && !liveTick ? (
                       <span className="text-xs text-zinc-500">Fetching price...</span>
-                    ) : price ? (
-                      <span className="font-mono text-zinc-100">{formatPrice(price)}</span>
+                    ) : livePrice ? (
+                      <span className="font-mono text-zinc-100">{formatPrice(livePrice)}</span>
                     ) : (
                       <span className="text-xs text-rose-400">Unable to quote</span>
                     )}
                   </div>
                 )}
               </div>
+
+              {/* Limit Price Input */}
+              {orderType === "limit" && (
+                <div className="space-y-2">
+                  <label className="text-xs font-medium uppercase tracking-wide text-zinc-500">Limit Price</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono text-zinc-500">$</span>
+                    <input
+                      type="number"
+                      value={limitPrice}
+                      onChange={(e) => setLimitPrice(e.target.value)}
+                      placeholder="0.00"
+                      min="0"
+                      step="0.01"
+                      className={`w-full rounded border border-zinc-800 bg-zinc-900 py-2.5 pl-8 pr-4 font-mono text-zinc-100 placeholder:text-zinc-700 focus:outline-none focus:ring-1 ${
+                        side === "buy" ? "focus:border-emerald-500 focus:ring-emerald-500" : "focus:border-rose-500 focus:ring-rose-500"
+                      }`}
+                    />
+                  </div>
+                  {livePrice && parsedLimit > 0 && (
+                    <p className="text-xs text-zinc-500">
+                      Last: <span className="font-mono">{formatPrice(livePrice)}</span> ·
+                      {" "}
+                      <span className={parsedLimit < livePrice ? "text-emerald-400" : "text-rose-400"}>
+                        {(((parsedLimit - livePrice) / livePrice) * 100).toFixed(2)}% from last
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Amount Input */}
               <div className="space-y-2">
@@ -310,7 +408,13 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
                 </button>
                 <button
                   onClick={handleConfirmReview}
-                  disabled={!activeSymbol || !amount || !price || quoteQ.isLoading}
+                  disabled={
+                    !activeSymbol ||
+                    !amount ||
+                    !price ||
+                    quoteQ.isLoading ||
+                    (orderType === "limit" && !parsedLimit)
+                  }
                   className={`flex-1 rounded py-2.5 font-semibold text-zinc-950 transition-colors disabled:opacity-50 ${
                     side === "buy" ? "bg-emerald-500 hover:bg-emerald-400" : "bg-rose-500 hover:bg-rose-400"
                   }`}
@@ -339,7 +443,11 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
                   <span className="font-mono font-medium text-zinc-200">{shares} {shares === 1 ? 'share' : 'shares'}</span>
                 </div>
                 <div className="flex justify-between border-b border-zinc-800 p-3">
-                  <span className="text-zinc-500">Execution Price</span>
+                  <span className="text-zinc-500">Order Type</span>
+                  <span className="font-mono font-medium text-zinc-200 uppercase">{orderType}</span>
+                </div>
+                <div className="flex justify-between border-b border-zinc-800 p-3">
+                  <span className="text-zinc-500">{orderType === "limit" ? "Limit Price" : "Execution Price"}</span>
                   <span className="font-mono font-medium text-zinc-200">{formatPrice(price!)}</span>
                 </div>
                 <div className="flex justify-between bg-zinc-900/50 p-3">
@@ -350,9 +458,17 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
 
               {side === "buy" && portfolio && (
                 <div className="text-center text-xs text-zinc-500">
-                  Cash Required: <span className="font-mono">{formatPrice(costOrProceeds)}</span>
+                  Cost: <span className="font-mono">{formatPrice(costOrProceeds)}</span>
                   <br />
-                  Cash Available: <span className="font-mono">{formatPrice(portfolio.cash)}</span>
+                  Buying Power: <span className="font-mono">{formatPrice(portfolio.buying_power)}</span>
+                  {portfolio.pending_settlement > 0 && (
+                    <>
+                      <br />
+                      <span className="text-amber-400">
+                        ({formatPrice(portfolio.pending_settlement)} settling)
+                      </span>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -384,7 +500,13 @@ export default function TradeModal({ isOpen, onClose, initialSide, portfolio, on
                     side === "buy" ? "bg-emerald-500 hover:bg-emerald-400" : "bg-rose-500 hover:bg-rose-400"
                   }`}
                 >
-                  {submitting ? "Executing..." : `Confirm ${side === "buy" ? "Buy" : "Sell"}`}
+                  {submitting
+                    ? orderType === "limit"
+                      ? "Placing..."
+                      : "Executing..."
+                    : orderType === "limit"
+                      ? `Place Limit ${side === "buy" ? "Buy" : "Sell"}`
+                      : `Confirm ${side === "buy" ? "Buy" : "Sell"}`}
                 </button>
               </div>
             </div>
