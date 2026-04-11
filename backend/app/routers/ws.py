@@ -13,20 +13,27 @@ router = APIRouter()
 async def _authenticate(websocket: WebSocket) -> User | None:
     token = websocket.query_params.get("token")
     if not token:
+        log.warning("ws auth: no token provided")
         return None
     try:
         payload = decode_access_token(token)
-    except JWTError:
+    except JWTError as e:
+        log.warning("ws auth: JWT decode failed: %s", e)
         return None
     sub = payload.get("sub")
     if sub is None:
+        log.warning("ws auth: no 'sub' in payload")
         return None
     try:
         user_id = int(sub)
     except (TypeError, ValueError):
+        log.warning("ws auth: invalid sub %r", sub)
         return None
     async with SessionLocal() as db:
-        return await db.get(User, user_id)
+        user = await db.get(User, user_id)
+    if user is None:
+        log.warning("ws auth: user_id=%d not found in DB", user_id)
+    return user
 
 
 @router.websocket("/ws")

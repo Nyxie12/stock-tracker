@@ -1,5 +1,7 @@
 import { api } from "./client";
 
+export type HeatmapUniverse = "sp500" | "nasdaq" | "watchlist";
+
 export type HeatmapRow = {
   symbol: string;
   name: string;
@@ -11,11 +13,14 @@ export type HeatmapRow = {
 };
 
 export type HeatmapResponse = {
-  universe: "sp500" | "watchlist";
+  universe: HeatmapUniverse;
   rows: HeatmapRow[];
+  last_updated: number | null;
+  stale: boolean;
+  building: boolean;
 };
 
 export const heatmapApi = {
-  get: (universe: "sp500" | "watchlist") =>
+  get: (universe: HeatmapUniverse) =>
     api.get<HeatmapResponse>(`/api/heatmap?universe=${universe}`),
 };
