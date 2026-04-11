@@ -43,7 +43,7 @@ let flushTimer: number | null = null;
 function wsUrl(): string | null {
   const token = getAuthToken();
   if (!token) return null;
-  const baseUrl = import.meta.env.VITE_API_URL || "";
+  const baseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
   const base = baseUrl
     ? baseUrl.replace(/^http/, "ws")
     : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
